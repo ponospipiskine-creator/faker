@@ -1,4 +1,3 @@
-# bot.py — Многофункциональный рандомизатор 2026 (всё через кнопки!)
 import asyncio
 import logging
 import random
@@ -8,9 +7,10 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 
 from faker import Faker
 from fake_useragent import UserAgent
+import aiohttp
 
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = "8629463424:AAFSkNFDNgqpuK6wDjtS12T2oD6Bs2TSNjk"  # ← ТВОЙ ТОКЕН
+BOT_TOKEN = "8629463424:AAFSkNFDNgqpuK6wDjtS12T2oD6Bs2TSNjk"
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -18,6 +18,9 @@ dp = Dispatcher()
 
 fake = Faker('ru_RU')
 ua = UserAgent()
+
+# Хранилище временных почт
+temp_sessions: dict[int, dict] = {}
 
 # ==================== ДАННЫЕ ДЛЯ НОМЕРОВ ====================
 COUNTRIES = {
@@ -51,7 +54,28 @@ def generate_phone(country_data):
     for digit in local:
         formatted = formatted.replace("X", digit, 1)
 
-    return f"+{code} {formatted}" if code else formatted
+    return f"+{code} {formatted}"
+
+# ==================== TEMP MAIL (1secmail) ====================
+async def generate_temp_email():
+    async with aiohttp.ClientSession() as session:
+        async with session.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1") as resp:
+            data = await resp.json()
+            full_email = data[0]
+            login, domain = full_email.split("@")
+            return full_email, login, domain
+
+async def get_inbox(login: str, domain: str):
+    url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            return await resp.json()
+
+async def read_message(login: str, domain: str, msg_id: int):
+    url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            return await resp.json()
 
 # ==================== КЛАВИАТУРЫ ====================
 def get_main_menu():
@@ -60,6 +84,7 @@ def get_main_menu():
         [InlineKeyboardButton(text="🖥️ Генератор User-Agent", callback_data="category_ua")],
         [InlineKeyboardButton(text="🌐 Генератор Fake IP", callback_data="category_ip")],
         [InlineKeyboardButton(text="👤 Генератор фейковых личностей", callback_data="category_person")],
+        [InlineKeyboardButton(text="📧 Одноразовая почта", callback_data="category_temp_mail")],
     ])
 
 def get_phones_menu():
@@ -100,6 +125,15 @@ def get_person_menu():
         [InlineKeyboardButton(text="← Назад", callback_data="main")],
     ])
 
+def get_temp_mail_menu(email: str = None):
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    if email:
+        kb.inline_keyboard.append([InlineKeyboardButton(text=f"📧 {email}", callback_data="dummy")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="🔄 Новый ящик", callback_data="new_temp_mail")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="📬 Проверить почту", callback_data="check_temp_mail")])
+    kb.inline_keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="main")])
+    return kb
+
 # ==================== ГЕНЕРАТОРЫ ====================
 def generate_personality():
     return f"""👤 **Фейковая личность** 
@@ -121,8 +155,7 @@ def generate_personality():
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "🚀 **Многофункциональный рандомизатор**\n\n"
-        "Выбери раздел ниже — всё через кнопки, результат в отдельном сообщении (легко копировать):",
+        "🚀 **Многофункциональный рандомизатор 2026**\n\nВыбери раздел ниже:",
         reply_markup=get_main_menu(),
         parse_mode="Markdown"
     )
@@ -130,15 +163,97 @@ async def cmd_start(message: Message):
 @dp.callback_query()
 async def callback_handler(call: CallbackQuery):
     data = call.data
+    chat_id = call.message.chat.id
 
     if data == "main":
+        await call.message.edit_text("🚀 **Выбери раздел:**", reply_markup=get_main_menu(), parse_mode="Markdown")
+        await call.answer()
+
+    # ==================== ОДНОРАЗОВАЯ ПОЧТА ====================
+    elif data == "category_temp_mail":
+        if chat_id not in temp_sessions:
+            email, login, domain = await generate_temp_email()
+            temp_sessions[chat_id] = {"email": email, "login": login, "domain": domain}
+        else:
+            email = temp_sessions[chat_id]["email"]
+
         await call.message.edit_text(
-            "🚀 **Выбери раздел:**",
-            reply_markup=get_main_menu(),
+            f"📧 **Одноразовая почта**\n\nТекущий ящик:\n`{email}`\n\nПисьма приходят мгновенно.",
+            reply_markup=get_temp_mail_menu(email),
             parse_mode="Markdown"
         )
         await call.answer()
 
+    elif data == "new_temp_mail":
+        email, login, domain = await generate_temp_email()
+        temp_sessions[chat_id] = {"email": email, "login": login, "domain": domain}
+        await call.message.edit_text(
+            f"📧 **Новый ящик создан!**\n\n`{email}`",
+            reply_markup=get_temp_mail_menu(email),
+            parse_mode="Markdown"
+        )
+        await call.answer("✅ Новый ящик готов!")
+
+    elif data == "check_temp_mail":
+        if chat_id not in temp_sessions:
+            await call.answer("Сначала создай ящик!", show_alert=True)
+            return
+        session = temp_sessions[chat_id]
+        messages = await get_inbox(session["login"], session["domain"])
+
+        if not messages:
+            text = f"📭 **Ящик пуст**\n\n`{session['email']}`"
+            kb = get_temp_mail_menu(session["email"])
+        else:
+            text = f"📬 **Входящие** ({len(messages)} шт)\n\n"
+            kb_list = []
+            for m in messages:
+                subj = m.get("subject") or "Без темы"
+                text += f"• {subj} от {m['from']}\n"
+                kb_list.append([InlineKeyboardButton(
+                    text=f"Открыть #{m['id']}",
+                    callback_data=f"read_temp_{m['id']}"
+                )])
+            kb = InlineKeyboardMarkup(inline_keyboard=kb_list)
+            kb.inline_keyboard.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="check_temp_mail")])
+            kb.inline_keyboard.append([InlineKeyboardButton(text="🔄 Новый ящик", callback_data="new_temp_mail")])
+            kb.inline_keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="main")])
+
+        await call.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await call.answer()
+
+    elif data.startswith("read_temp_"):
+        if chat_id not in temp_sessions:
+            await call.answer("Ящик устарел, создай новый", show_alert=True)
+            return
+        msg_id = int(data.split("_")[-1])
+        session = temp_sessions[chat_id]
+        letter = await read_message(session["login"], session["domain"], msg_id)
+
+        body = letter.get("textBody") or letter.get("body") or letter.get("htmlBody") or "Текст отсутствует"
+
+        text = f"""📧 **Письмо #{msg_id}**
+
+**От:** {letter.get('from', '—')}
+**Тема:** {letter.get('subject', 'Без темы')}
+**Дата:** {letter.get('date', '—')}
+
+━━━━━━━━━━━━━━━
+{body}
+━━━━━━━━━━━━━━━
+
+`{session['email']}`"""
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Обновить ящик", callback_data="check_temp_mail")],
+            [InlineKeyboardButton(text="🔄 Новый ящик", callback_data="new_temp_mail")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
+        ])
+
+        await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
+        await call.answer("✅ Письмо открыто")
+
+    # ==================== СТАРЫЕ РАЗДЕЛЫ ====================
     elif data == "category_phones":
         await call.message.edit_text(
             "📱 **Генератор телефонных номеров**\nВыбери страну:",
@@ -147,31 +262,6 @@ async def callback_handler(call: CallbackQuery):
         )
         await call.answer()
 
-    elif data == "category_ua":
-        await call.message.edit_text(
-            "🖥️ **Генератор User-Agent**\nВыбери тип:",
-            reply_markup=get_ua_menu(),
-            parse_mode="Markdown"
-        )
-        await call.answer()
-
-    elif data == "category_ip":
-        await call.message.edit_text(
-            "🌐 **Генератор Fake IP**\nВыбери версию:",
-            reply_markup=get_ip_menu(),
-            parse_mode="Markdown"
-        )
-        await call.answer()
-
-    elif data == "category_person":
-        await call.message.edit_text(
-            "👤 **Генератор фейковых личностей**\n(умная генерация на русском)",
-            reply_markup=get_person_menu(),
-            parse_mode="Markdown"
-        )
-        await call.answer()
-
-    # === ГЕНЕРАЦИЯ НОМЕРОВ ===
     elif data.startswith("generate_phone_"):
         code = data.replace("generate_phone_", "")
         if code == "random":
@@ -188,10 +278,17 @@ async def callback_handler(call: CallbackQuery):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
 
-        await bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb)
+        await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
-    # === ГЕНЕРАЦИЯ USER-AGENT ===
+    elif data == "category_ua":
+        await call.message.edit_text(
+            "🖥️ **Генератор User-Agent**\nВыбери тип:",
+            reply_markup=get_ua_menu(),
+            parse_mode="Markdown"
+        )
+        await call.answer()
+
     elif data.startswith("generate_ua_"):
         typ = data.replace("generate_ua_", "")
         if typ == "random":
@@ -221,10 +318,17 @@ async def callback_handler(call: CallbackQuery):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
 
-        await bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb)
+        await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
-    # === ГЕНЕРАЦИЯ IP ===
+    elif data == "category_ip":
+        await call.message.edit_text(
+            "🌐 **Генератор Fake IP**\nВыбери версию:",
+            reply_markup=get_ip_menu(),
+            parse_mode="Markdown"
+        )
+        await call.answer()
+
     elif data.startswith("generate_ip_"):
         typ = data.replace("generate_ip_", "")
         if typ == "4":
@@ -245,25 +349,31 @@ async def callback_handler(call: CallbackQuery):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
 
-        await bot.send_message(call.message.chat.id, text, parse_mode="Markdown", reply_markup=kb)
+        await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
-    # === ГЕНЕРАЦИЯ ЛИЧНОСТИ ===
+    elif data == "category_person":
+        await call.message.edit_text(
+            "👤 **Генератор фейковых личностей**\n(умная генерация на русском)",
+            reply_markup=get_person_menu(),
+            parse_mode="Markdown"
+        )
+        await call.answer()
+
     elif data == "generate_person":
         person = generate_personality()
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Ещё одну личность", callback_data="generate_person")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
 
-        await bot.send_message(call.message.chat.id, person, parse_mode="Markdown", reply_markup=kb)
+        await bot.send_message(chat_id, person, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     else:
         await call.answer("Неизвестная команда", show_alert=True)
 
-# ==================== ЗАПУСК (ИСПРАВЛЕНО) ====================
+# ==================== ЗАПУСК ====================
 async def main():
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
