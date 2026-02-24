@@ -100,7 +100,7 @@ async def read_message(token: str, msg_id: str):
         async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
-# ==================== СУПЕР-УМНАЯ ГЕНЕРАЦИЯ ЛИЧНОСТИ (HTML) ====================
+# ==================== СУПЕР-УМНАЯ ГЕНЕРАЦИЯ ЛИЧНОСТИ (ИСПРАВЛЕНО) ====================
 def generate_personality():
     is_male = random.choice([True, False])
     if is_male:
@@ -118,7 +118,7 @@ def generate_personality():
     age = fake.random_int(18, 65)
     dob = fake.date_of_birth(minimum_age=18, maximum_age=65)
     city = fake.city()
-    address = fake.address().replace("<", "&lt;").replace(">", "&gt;")  # защита HTML
+    address = fake.address().replace("<", "&lt;").replace(">", "&gt;")
     email = fake.email()
     phone = fake.phone_number()
     job = fake.job().replace("<", "&lt;").replace(">", "&gt;")
@@ -127,29 +127,26 @@ def generate_personality():
     passport = fake.passport_number()
 
     # Знак зодиака
-    month = dob.month
-    day = dob.day
-    if (month == 3 and day >= 21) or (month == 4 and day <= 19): zodiac = "♈ Овен"
-    elif (month == 4 and day >= 20) or (month == 5 and day <= 20): zodiac = "♉ Телец"
-    elif (month == 5 and day >= 21) or (month == 6 and day <= 20): zodiac = "♊ Близнецы"
-    elif (month == 6 and day >= 21) or (month == 7 and day <= 22): zodiac = "♋ Рак"
-    elif (month == 7 and day >= 23) or (month == 8 and day <= 22): zodiac = "♌ Лев"
-    elif (month == 8 and day >= 23) or (month == 9 and day <= 22): zodiac = "♍ Дева"
-    elif (month == 9 and day >= 23) or (month == 10 and day <= 22): zodiac = "♎ Весы"
-    elif (month == 10 and day >= 23) or (month == 11 and day <= 21): zodiac = "♏ Скорпион"
-    elif (month == 11 and day >= 22) or (month == 12 and day <= 21): zodiac = "♐ Стрелец"
-    elif (month == 12 and day >= 22) or (month == 1 and day <= 19): zodiac = "♑ Козерог"
-    elif (month == 1 and day >= 20) or (month == 2 and day <= 18): zodiac = "♒ Водолей"
-    else: zodiac = "♓ Рыбы"
+    month, day = dob.month, dob.day
+    zodiac_map = {
+        ((3,21),(4,19)): "♈ Овен", ((4,20),(5,20)): "♉ Телец", ((5,21),(6,20)): "♊ Близнецы",
+        ((6,21),(7,22)): "♋ Рак", ((7,23),(8,22)): "♌ Лев", ((8,23),(9,22)): "♍ Дева",
+        ((9,23),(10,22)): "♎ Весы", ((10,23),(11,21)): "♏ Скорпион",
+        ((11,22),(12,21)): "♐ Стрелец", ((12,22),(1,19)): "♑ Козерог",
+        ((1,20),(2,18)): "♒ Водолей", ((2,19),(3,20)): "♓ Рыбы"
+    }
+    zodiac = next((z for (start,end), z in zodiac_map.items() if (start <= (month,day) <= end) or (start[0]>end[0] and ((month,day)>=start or (month,day)<=end))), "♓ Рыбы")
 
-    hobbies = ", ".join(fake.words(nb=5, part_of_speech="noun"))
-    bio = fake.text(max_nb_chars=120).replace("<", "&lt;").replace(">", "&gt;")
+    # ХОББИ — ИСПРАВЛЕНО (убрал part_of_speech)
+    hobbies = ", ".join(fake.words(nb=5))
+
+    bio = fake.text(max_nb_chars=140).replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")
 
     inn = fake.ssn()
     snils = ''.join(str(random.randint(0,9)) for _ in range(11))
     card = fake.credit_card_number(card_type="visa")
 
-    return f"""<b>👤 СУПЕР-УМНАЯ ЛИЧНОСТЬ</b>
+    return f"""<b>👤 СУПЕР-УМНАЯ ЛИЧНОСТЬ v2</b>
 
 <b>ФИО:</b> {full_name}
 <b>Пол:</b> {gender}
@@ -177,7 +174,7 @@ def generate_personality():
 
 <i>Сгенерировано @fakegeneratorBOBOBOT</i>"""
 
-# ==================== КЛАВИАТУРЫ ====================
+# ==================== КЛАВИАТУРЫ (без изменений) ====================
 def get_main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📱 Генератор номеров", callback_data="category_phones")],
@@ -188,6 +185,8 @@ def get_main_menu():
         [InlineKeyboardButton(text="❓ Задать вопрос", callback_data="ask_question")],
     ])
 
+# ... (все остальные меню точно такие же, как в предыдущей версии — я их не менял, чтобы не копировать 100 строк зря)
+
 def get_phones_menu():
     kb = InlineKeyboardMarkup(inline_keyboard=[])
     row = []
@@ -196,8 +195,7 @@ def get_phones_menu():
         if len(row) == 2:
             kb.inline_keyboard.append(row)
             row = []
-    if row:
-        kb.inline_keyboard.append(row)
+    if row: kb.inline_keyboard.append(row)
     kb.inline_keyboard.append([InlineKeyboardButton(text="🎲 Случайная страна", callback_data="generate_phone_random")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="main")])
     return kb
@@ -235,14 +233,10 @@ def get_temp_mail_menu(email: str = None):
     kb.inline_keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="main")])
     return kb
 
-# ==================== ОБРАБОТЧИКИ ====================
+# ==================== ОБРАБОТЧИКИ (с исправлением) ====================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer(
-        "🚀 **Многофункциональный рандомизатор 2026**\n\nВыбери раздел ниже:",
-        reply_markup=get_main_menu(),
-        parse_mode="Markdown"
-    )
+    await message.answer("🚀 **Многофункциональный рандомизатор 2026**\n\nВыбери раздел ниже:", reply_markup=get_main_menu(), parse_mode="HTML")
 
 @dp.callback_query()
 async def callback_handler(call: CallbackQuery):
@@ -250,20 +244,15 @@ async def callback_handler(call: CallbackQuery):
     chat_id = call.message.chat.id
 
     if data == "main":
-        await call.message.edit_text("🚀 **Выбери раздел:**", reply_markup=get_main_menu(), parse_mode="Markdown")
+        await call.message.edit_text("🚀 **Выбери раздел:**", reply_markup=get_main_menu(), parse_mode="HTML")
         await call.answer()
 
-    # ==================== ЗАДАТЬ ВОПРОС (URL на @ip_proud_3) ====================
     elif data == "ask_question":
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="💬 Написать @ip_proud_3", url="https://t.me/ip_proud_3")],
             [InlineKeyboardButton(text="← Главное меню", callback_data="main")]
         ])
-        await call.message.edit_text(
-            "❓ <b>Хочешь задать вопрос разработчику?</b>\n\nНажми кнопку ниже — сразу откроется чат с @ip_proud_3",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
+        await call.message.edit_text("❓ <b>Хочешь задать вопрос разработчику?</b>\n\nНажми кнопку ниже — сразу откроется чат с @ip_proud_3", reply_markup=kb, parse_mode="HTML")
         await call.answer()
 
     # ==================== ОДНОРАЗОВАЯ ПОЧТА ====================
@@ -278,33 +267,23 @@ async def callback_handler(call: CallbackQuery):
         else:
             email = temp_sessions[chat_id]["email"]
 
-        await call.message.edit_text(
-            f"📧 <b>Одноразовая почта (mail.tm)</b>\n\nТекущий ящик:\n<code>{email}</code>\n\nПисьма приходят мгновенно!",
-            reply_markup=get_temp_mail_menu(email),
-            parse_mode="HTML"
-        )
+        await call.message.edit_text(f"📧 <b>Одноразовая почта (mail.tm)</b>\n\nТекущий ящик:\n<code>{email}</code>\n\nПисьма приходят мгновенно!", reply_markup=get_temp_mail_menu(email), parse_mode="HTML")
         await call.answer()
 
     elif data == "new_temp_mail":
         try:
             email, token = await create_temp_account()
             temp_sessions[chat_id] = {"email": email, "token": token}
-            await call.message.edit_text(
-                f"📧 <b>Новый ящик создан!</b>\n\n<code>{email}</code>",
-                reply_markup=get_temp_mail_menu(email),
-                parse_mode="HTML"
-            )
+            await call.message.edit_text(f"📧 <b>Новый ящик создан!</b>\n\n<code>{email}</code>", reply_markup=get_temp_mail_menu(email), parse_mode="HTML")
             await call.answer("✅ Новый ящик готов!")
         except:
             await call.answer("Не удалось создать ящик, попробуй снова", show_alert=True)
 
     elif data == "check_temp_mail":
         if chat_id not in temp_sessions:
-            await call.answer("Сначала создай ящик!", show_alert=True)
-            return
+            await call.answer("Сначала создай ящик!", show_alert=True); return
         session = temp_sessions[chat_id]
         messages = await get_inbox(session["token"])
-
         if not messages:
             text = f"📭 <b>Ящик пуст</b>\n\n<code>{session['email']}</code>"
             kb = get_temp_mail_menu(session["email"])
@@ -321,23 +300,19 @@ async def callback_handler(call: CallbackQuery):
             kb.inline_keyboard.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="check_temp_mail")])
             kb.inline_keyboard.append([InlineKeyboardButton(text="🔄 Новый ящик", callback_data="new_temp_mail")])
             kb.inline_keyboard.append([InlineKeyboardButton(text="← Главное меню", callback_data="main")])
-
         await call.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         await call.answer()
 
     elif data.startswith("read_temp_"):
         if chat_id not in temp_sessions:
-            await call.answer("Ящик устарел, создай новый", show_alert=True)
-            return
+            await call.answer("Ящик устарел, создай новый", show_alert=True); return
         msg_id = data.split("_")[-1]
         session = temp_sessions[chat_id]
         letter = await read_message(session["token"], msg_id)
-
         body = letter.get("text") or letter.get("html") or letter.get("intro") or "Текст отсутствует"
         from_addr = letter.get("from", {}).get("address", "—")
         subject = letter.get("subject", "Без темы")
         date = letter.get("createdAt", "—")
-
         text = f"""📧 <b>Письмо</b>
 
 <b>От:</b> {from_addr}
@@ -349,13 +324,11 @@ async def callback_handler(call: CallbackQuery):
 ━━━━━━━━━━━━━━━
 
 <code>{session['email']}</code>"""
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Обновить ящик", callback_data="check_temp_mail")],
             [InlineKeyboardButton(text="🔄 Новый ящик", callback_data="new_temp_mail")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
-
         await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         await call.answer("✅ Письмо открыто")
 
@@ -363,26 +336,19 @@ async def callback_handler(call: CallbackQuery):
     elif data == "category_phones":
         await call.message.edit_text("📱 <b>Генератор телефонных номеров</b>\nВыбери страну:", reply_markup=get_phones_menu(), parse_mode="HTML")
         await call.answer()
-
     elif data.startswith("generate_phone_"):
         code = data.replace("generate_phone_", "")
-        if code == "random":
-            code = random.choice(list(COUNTRIES.keys()))
+        if code == "random": code = random.choice(list(COUNTRIES.keys()))
         info = COUNTRIES[code]
         phone = generate_phone(info["data"])
         text = f"📱 <b>Вот ваш сгенерированный номер</b>\n\nСтрана: {info['flag']} {info['name']}\n\n<code>{phone}</code>\n\n<b>@fakegeneratorBOBOBOT</b>"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🔄 Ещё для {info['name']}", callback_data=f"generate_phone_{code}")],
-            [InlineKeyboardButton(text="🌍 Другая страна", callback_data="category_phones")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
-        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"🔄 Ещё для {info['name']}", callback_data=f"generate_phone_{code}")],[InlineKeyboardButton(text="🌍 Другая страна", callback_data="category_phones")],[InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]])
         await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     elif data == "category_ua":
         await call.message.edit_text("🖥️ <b>Генератор User-Agent</b>\nВыбери тип:", reply_markup=get_ua_menu(), parse_mode="HTML")
         await call.answer()
-
     elif data.startswith("generate_ua_"):
         typ = data.replace("generate_ua_", "")
         if typ == "random": uastr, name = ua.random, "Случайный"
@@ -391,37 +357,21 @@ async def callback_handler(call: CallbackQuery):
         elif typ == "safari": uastr, name = ua.safari, "Safari"
         elif typ == "mobile": uastr, name = ua.random, "Mobile"
         else: uastr, name = ua.random, "Случайный"
-
         text = f"🖥️ <b>Вот ваш User-Agent ({name})</b>\n\n<pre>{uastr}</pre>\n\n@fakegeneratorBOBOBOT"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],
-            [InlineKeyboardButton(text="Другой тип", callback_data="category_ua")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
-        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],[InlineKeyboardButton(text="Другой тип", callback_data="category_ua")],[InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]])
         await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     elif data == "category_ip":
         await call.message.edit_text("🌐 <b>Генератор Fake IP</b>\nВыбери версию:", reply_markup=get_ip_menu(), parse_mode="HTML")
         await call.answer()
-
     elif data.startswith("generate_ip_"):
         typ = data.replace("generate_ip_", "")
-        if typ == "4":
-            ip = fake.ipv4()
-            name = "IPv4"
-        elif typ == "6":
-            ip = fake.ipv6()
-            name = "IPv6"
-        else:
-            ip = f"IPv4: {fake.ipv4()}\nIPv6: {fake.ipv6()}"
-            name = "Оба"
+        if typ == "4": ip, name = fake.ipv4(), "IPv4"
+        elif typ == "6": ip, name = fake.ipv6(), "IPv6"
+        else: ip, name = f"IPv4: {fake.ipv4()}\nIPv6: {fake.ipv6()}", "Оба"
         text = f"🌐 <b>Вот ваш Fake IP ({name})</b>\n\n<code>{ip}</code>\n\n<b>@fakegeneratorBOBOBOT</b>"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],
-            [InlineKeyboardButton(text="Другая версия", callback_data="category_ip")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
-        ])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],[InlineKeyboardButton(text="Другая версия", callback_data="category_ip")],[InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]])
         await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         await call.answer("✅ Готово!")
 
@@ -431,11 +381,7 @@ async def callback_handler(call: CallbackQuery):
 
     elif data == "generate_person":
         person = generate_personality()
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Ещё одну супер-личность", callback_data="generate_person")],
-            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
-        ])
-
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔄 Ещё одну супер-личность", callback_data="generate_person")],[InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]])
         await bot.send_message(chat_id, person, parse_mode="HTML", reply_markup=kb)
         await call.answer("✅ Супер-личность готова!")
 
