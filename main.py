@@ -56,7 +56,7 @@ def generate_phone(country_data):
 
     return f"+{code} {formatted}"
 
-# ==================== MAIL.TM API (стабильный 2026) ====================
+# ==================== MAIL.TM API ====================
 async def get_domains():
     headers = {"User-Agent": ua.random}
     async with aiohttp.ClientSession() as session:
@@ -73,14 +73,12 @@ async def create_temp_account():
 
     headers = {"User-Agent": ua.random, "Content-Type": "application/json"}
 
-    # Создаём аккаунт
     async with aiohttp.ClientSession() as session:
         payload = {"address": email, "password": password}
         async with session.post("https://api.mail.tm/accounts", json=payload, headers=headers) as resp:
             if resp.status not in (201, 200):
                 raise Exception("Не удалось создать почту")
 
-    # Получаем токен
     async with aiohttp.ClientSession() as session:
         payload = {"address": email, "password": password}
         async with session.post("https://api.mail.tm/token", json=payload, headers=headers) as resp:
@@ -111,6 +109,7 @@ def get_main_menu():
         [InlineKeyboardButton(text="🌐 Генератор Fake IP", callback_data="category_ip")],
         [InlineKeyboardButton(text="👤 Генератор фейковых личностей", callback_data="category_person")],
         [InlineKeyboardButton(text="📧 Одноразовая почта", callback_data="category_temp_mail")],
+        [InlineKeyboardButton(text="❓ Задать вопрос", callback_data="ask_question")],   # ← НОВАЯ КНОПКА
     ])
 
 def get_phones_menu():
@@ -195,7 +194,20 @@ async def callback_handler(call: CallbackQuery):
         await call.message.edit_text("🚀 **Выбери раздел:**", reply_markup=get_main_menu(), parse_mode="Markdown")
         await call.answer()
 
-    # ==================== ОДНОРАЗОВАЯ ПОЧТА (mail.tm) ====================
+    # ==================== НОВАЯ КНОПКА — ЗАДАТЬ ВОПРОС ====================
+    elif data == "ask_question":
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать @ip_proud_3", url="https://t.me/ip_proud_3")],
+            [InlineKeyboardButton(text="← Главное меню", callback_data="main")]
+        ])
+        await call.message.edit_text(
+            "❓ **Хочешь задать вопрос?**\n\nНажми кнопку ниже — я сразу открою чат с разработчиком (@ip_proud_3)",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
+        await call.answer()
+
+    # ==================== ОДНОРАЗОВАЯ ПОЧТА ====================
     elif data == "category_temp_mail":
         if chat_id not in temp_sessions:
             try:
@@ -291,7 +303,7 @@ async def callback_handler(call: CallbackQuery):
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Письмо открыто")
 
-    # ==================== СТАРЫЕ РАЗДЕЛЫ (без изменений) ====================
+    # ==================== ОСТАЛЬНЫЕ РАЗДЕЛЫ ====================
     elif data == "category_phones":
         await call.message.edit_text("📱 **Генератор телефонных номеров**\nВыбери страну:", reply_markup=get_phones_menu(), parse_mode="Markdown")
         await call.answer()
