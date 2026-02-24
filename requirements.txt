@@ -1,0 +1,3 @@
+aiogram
+faker
+fake-useragent
