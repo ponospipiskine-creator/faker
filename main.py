@@ -19,7 +19,7 @@ dp = Dispatcher()
 fake = Faker('ru_RU')
 ua = UserAgent()
 
-# Хранилище временных почт
+# Хранилище (email + токен для mail.tm)
 temp_sessions: dict[int, dict] = {}
 
 # ==================== ДАННЫЕ ДЛЯ НОМЕРОВ ====================
@@ -56,25 +56,51 @@ def generate_phone(country_data):
 
     return f"+{code} {formatted}"
 
-# ==================== TEMP MAIL (1secmail) ====================
-async def generate_temp_email():
+# ==================== MAIL.TM API (стабильный 2026) ====================
+async def get_domains():
+    headers = {"User-Agent": ua.random}
     async with aiohttp.ClientSession() as session:
-        async with session.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1") as resp:
+        async with session.get("https://api.mail.tm/domains", headers=headers) as resp:
             data = await resp.json()
-            full_email = data[0]
-            login, domain = full_email.split("@")
-            return full_email, login, domain
+            return [item["domain"] for item in data.get("hydra:member", [])]
 
-async def get_inbox(login: str, domain: str):
-    url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            return await resp.json()
+async def create_temp_account():
+    domains = await get_domains()
+    domain = random.choice(domains)
+    username = fake.user_name().lower().replace(" ", "") + str(random.randint(1000, 9999))
+    email = f"{username}@{domain}"
+    password = "TempPass123!"
 
-async def read_message(login: str, domain: str, msg_id: int):
-    url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg_id}"
+    headers = {"User-Agent": ua.random, "Content-Type": "application/json"}
+
+    # Создаём аккаунт
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
+        payload = {"address": email, "password": password}
+        async with session.post("https://api.mail.tm/accounts", json=payload, headers=headers) as resp:
+            if resp.status not in (201, 200):
+                raise Exception("Не удалось создать почту")
+
+    # Получаем токен
+    async with aiohttp.ClientSession() as session:
+        payload = {"address": email, "password": password}
+        async with session.post("https://api.mail.tm/token", json=payload, headers=headers) as resp:
+            data = await resp.json()
+            token = data["token"]
+
+    return email, token
+
+async def get_inbox(token: str):
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": ua.random}
+    async with aiohttp.ClientSession() as session:
+        async with session.get("https://api.mail.tm/messages", headers=headers) as resp:
+            data = await resp.json()
+            return data.get("hydra:member", [])
+
+async def read_message(token: str, msg_id: str):
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": ua.random}
+    url = f"https://api.mail.tm/messages/{msg_id}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
 # ==================== КЛАВИАТУРЫ ====================
@@ -169,37 +195,44 @@ async def callback_handler(call: CallbackQuery):
         await call.message.edit_text("🚀 **Выбери раздел:**", reply_markup=get_main_menu(), parse_mode="Markdown")
         await call.answer()
 
-    # ==================== ОДНОРАЗОВАЯ ПОЧТА ====================
+    # ==================== ОДНОРАЗОВАЯ ПОЧТА (mail.tm) ====================
     elif data == "category_temp_mail":
         if chat_id not in temp_sessions:
-            email, login, domain = await generate_temp_email()
-            temp_sessions[chat_id] = {"email": email, "login": login, "domain": domain}
+            try:
+                email, token = await create_temp_account()
+                temp_sessions[chat_id] = {"email": email, "token": token}
+            except:
+                await call.answer("Сервис временно перегружен, попробуй через 10 сек", show_alert=True)
+                return
         else:
             email = temp_sessions[chat_id]["email"]
 
         await call.message.edit_text(
-            f"📧 **Одноразовая почта**\n\nТекущий ящик:\n`{email}`\n\nПисьма приходят мгновенно.",
+            f"📧 **Одноразовая почта (mail.tm)**\n\nТекущий ящик:\n`{email}`\n\nПисьма приходят мгновенно!",
             reply_markup=get_temp_mail_menu(email),
             parse_mode="Markdown"
         )
         await call.answer()
 
     elif data == "new_temp_mail":
-        email, login, domain = await generate_temp_email()
-        temp_sessions[chat_id] = {"email": email, "login": login, "domain": domain}
-        await call.message.edit_text(
-            f"📧 **Новый ящик создан!**\n\n`{email}`",
-            reply_markup=get_temp_mail_menu(email),
-            parse_mode="Markdown"
-        )
-        await call.answer("✅ Новый ящик готов!")
+        try:
+            email, token = await create_temp_account()
+            temp_sessions[chat_id] = {"email": email, "token": token}
+            await call.message.edit_text(
+                f"📧 **Новый ящик создан!**\n\n`{email}`",
+                reply_markup=get_temp_mail_menu(email),
+                parse_mode="Markdown"
+            )
+            await call.answer("✅ Новый ящик готов!")
+        except:
+            await call.answer("Не удалось создать ящик, попробуй снова", show_alert=True)
 
     elif data == "check_temp_mail":
         if chat_id not in temp_sessions:
             await call.answer("Сначала создай ящик!", show_alert=True)
             return
         session = temp_sessions[chat_id]
-        messages = await get_inbox(session["login"], session["domain"])
+        messages = await get_inbox(session["token"])
 
         if not messages:
             text = f"📭 **Ящик пуст**\n\n`{session['email']}`"
@@ -209,9 +242,11 @@ async def callback_handler(call: CallbackQuery):
             kb_list = []
             for m in messages:
                 subj = m.get("subject") or "Без темы"
-                text += f"• {subj} от {m['from']}\n"
+                fr = m.get("from", {})
+                from_addr = fr.get("address", "—") if isinstance(fr, dict) else "—"
+                text += f"• {subj} от {from_addr}\n"
                 kb_list.append([InlineKeyboardButton(
-                    text=f"Открыть #{m['id']}",
+                    text=f"Открыть #{m['id'][:8]}",
                     callback_data=f"read_temp_{m['id']}"
                 )])
             kb = InlineKeyboardMarkup(inline_keyboard=kb_list)
@@ -226,17 +261,20 @@ async def callback_handler(call: CallbackQuery):
         if chat_id not in temp_sessions:
             await call.answer("Ящик устарел, создай новый", show_alert=True)
             return
-        msg_id = int(data.split("_")[-1])
+        msg_id = data.split("_")[-1]
         session = temp_sessions[chat_id]
-        letter = await read_message(session["login"], session["domain"], msg_id)
+        letter = await read_message(session["token"], msg_id)
 
-        body = letter.get("textBody") or letter.get("body") or letter.get("htmlBody") or "Текст отсутствует"
+        body = letter.get("text") or letter.get("html") or letter.get("intro") or "Текст отсутствует"
+        from_addr = letter.get("from", {}).get("address", "—")
+        subject = letter.get("subject", "Без темы")
+        date = letter.get("createdAt", "—")
 
-        text = f"""📧 **Письмо #{msg_id}**
+        text = f"""📧 **Письмо**
 
-**От:** {letter.get('from', '—')}
-**Тема:** {letter.get('subject', 'Без темы')}
-**Дата:** {letter.get('date', '—')}
+**От:** {from_addr}
+**Тема:** {subject}
+**Дата:** {date}
 
 ━━━━━━━━━━━━━━━
 {body}
@@ -253,80 +291,50 @@ async def callback_handler(call: CallbackQuery):
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Письмо открыто")
 
-    # ==================== СТАРЫЕ РАЗДЕЛЫ ====================
+    # ==================== СТАРЫЕ РАЗДЕЛЫ (без изменений) ====================
     elif data == "category_phones":
-        await call.message.edit_text(
-            "📱 **Генератор телефонных номеров**\nВыбери страну:",
-            reply_markup=get_phones_menu(),
-            parse_mode="Markdown"
-        )
+        await call.message.edit_text("📱 **Генератор телефонных номеров**\nВыбери страну:", reply_markup=get_phones_menu(), parse_mode="Markdown")
         await call.answer()
 
     elif data.startswith("generate_phone_"):
         code = data.replace("generate_phone_", "")
         if code == "random":
             code = random.choice(list(COUNTRIES.keys()))
-
         info = COUNTRIES[code]
         phone = generate_phone(info["data"])
-
         text = f"📱 **Вот ваш сгенерированный номер**\n\nСтрана: {info['flag']} {info['name']}\n\n`{phone}`\n\n** @fakegeneratorBOBOBOT**"
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🔄 Ещё для {info['name']}", callback_data=f"generate_phone_{code}")],
             [InlineKeyboardButton(text="🌍 Другая страна", callback_data="category_phones")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
-
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     elif data == "category_ua":
-        await call.message.edit_text(
-            "🖥️ **Генератор User-Agent**\nВыбери тип:",
-            reply_markup=get_ua_menu(),
-            parse_mode="Markdown"
-        )
+        await call.message.edit_text("🖥️ **Генератор User-Agent**\nВыбери тип:", reply_markup=get_ua_menu(), parse_mode="Markdown")
         await call.answer()
 
     elif data.startswith("generate_ua_"):
         typ = data.replace("generate_ua_", "")
-        if typ == "random":
-            uastr = ua.random
-            name = "Случайный"
-        elif typ == "chrome":
-            uastr = ua.chrome
-            name = "Chrome"
-        elif typ == "firefox":
-            uastr = ua.firefox
-            name = "Firefox"
-        elif typ == "safari":
-            uastr = ua.safari
-            name = "Safari"
-        elif typ == "mobile":
-            uastr = ua.random
-            name = "Mobile"
-        else:
-            uastr = ua.random
-            name = "Случайный"
+        if typ == "random": uastr, name = ua.random, "Случайный"
+        elif typ == "chrome": uastr, name = ua.chrome, "Chrome"
+        elif typ == "firefox": uastr, name = ua.firefox, "Firefox"
+        elif typ == "safari": uastr, name = ua.safari, "Safari"
+        elif typ == "mobile": uastr, name = ua.random, "Mobile"
+        else: uastr, name = ua.random, "Случайный"
 
         text = f"🖥️ **Вот ваш User-Agent ({name})**\n\n```{uastr}```\n\n @fakegeneratorBOBOBOT"
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],
             [InlineKeyboardButton(text="Другой тип", callback_data="category_ua")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
-
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     elif data == "category_ip":
-        await call.message.edit_text(
-            "🌐 **Генератор Fake IP**\nВыбери версию:",
-            reply_markup=get_ip_menu(),
-            parse_mode="Markdown"
-        )
+        await call.message.edit_text("🌐 **Генератор Fake IP**\nВыбери версию:", reply_markup=get_ip_menu(), parse_mode="Markdown")
         await call.answer()
 
     elif data.startswith("generate_ip_"):
@@ -340,24 +348,17 @@ async def callback_handler(call: CallbackQuery):
         else:
             ip = f"IPv4: {fake.ipv4()}\nIPv6: {fake.ipv6()}"
             name = "Оба"
-
         text = f"🌐 **Вот ваш Fake IP ({name})**\n\n`{ip}`\n\n** @fakegeneratorBOBOBOT**"
-
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Ещё такой же", callback_data=data)],
             [InlineKeyboardButton(text="Другая версия", callback_data="category_ip")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
-
         await bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
     elif data == "category_person":
-        await call.message.edit_text(
-            "👤 **Генератор фейковых личностей**\n(умная генерация на русском)",
-            reply_markup=get_person_menu(),
-            parse_mode="Markdown"
-        )
+        await call.message.edit_text("👤 **Генератор фейковых личностей**\n(умная генерация на русском)", reply_markup=get_person_menu(), parse_mode="Markdown")
         await call.answer()
 
     elif data == "generate_person":
@@ -366,7 +367,6 @@ async def callback_handler(call: CallbackQuery):
             [InlineKeyboardButton(text="🔄 Ещё одну личность", callback_data="generate_person")],
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main")]
         ])
-
         await bot.send_message(chat_id, person, parse_mode="Markdown", reply_markup=kb)
         await call.answer("✅ Готово!")
 
