@@ -236,7 +236,7 @@ def get_temp_mail_menu(email: str = None):
 # ==================== ОБРАБОТЧИКИ (с исправлением) ====================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer("🚀 **Многофункциональный рандомизатор 2026**\n\nВыбери раздел ниже:", reply_markup=get_main_menu(), parse_mode="HTML")
+    await message.answer("🚀 Randomizer(Faker) \n\nВыбери раздел ниже:", reply_markup=get_main_menu(), parse_mode="HTML")
 
 @dp.callback_query()
 async def callback_handler(call: CallbackQuery):
